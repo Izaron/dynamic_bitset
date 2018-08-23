@@ -7,6 +7,7 @@
 // Copyright (c) 2014 Glen Joseph Fernandes
 // glenfe at live dot com
 // Copyright (c) 2014 Riccardo Marcangelo
+//             Copyright (c) 2018 Evgeny Shulgin
 //
 // Distributed under the Boost Software License, Version 1.0.
 //    (See accompanying file LICENSE_1_0.txt or copy at
@@ -283,6 +284,7 @@ public:
     dynamic_bitset& set();
     dynamic_bitset& reset(size_type n);
     dynamic_bitset& reset();
+    dynamic_bitset& fill(size_type first, size_type last, bool val = true);
     dynamic_bitset& flip(size_type n);
     dynamic_bitset& flip();
     bool test(size_type n) const;
@@ -369,6 +371,22 @@ private:
     static size_type block_index(size_type pos) BOOST_NOEXCEPT { return pos / bits_per_block; }
     static block_width_type bit_index(size_type pos) BOOST_NOEXCEPT { return static_cast<block_width_type>(pos % bits_per_block); }
     static Block bit_mask(size_type pos) BOOST_NOEXCEPT { return Block(1) << bit_index(pos); }
+    static Block bit_mask(size_type first, size_type last) BOOST_NOEXCEPT
+    {
+        Block res = (last == bits_per_block - 1)
+            ? static_cast<Block>(~0)
+            : ((Block(1) << (last + 1)) - 1);
+        res ^= (Block(1) << first) - 1;
+        return res;
+    }
+    static Block fill_block_bits(Block block, size_type first,
+        size_type last, bool val)
+    {
+        if (val)
+            return block | bit_mask(first, last);
+        else
+            return block & static_cast<Block>(~bit_mask(first, last));
+    }
 
     template <typename CharT, typename Traits, typename Alloc>
     void init_from_string(const std::basic_string<CharT, Traits, Alloc>& s,
@@ -1004,6 +1022,57 @@ dynamic_bitset<Block, Allocator>::reset()
 {
   std::fill(m_bits.begin(), m_bits.end(), Block(0));
   return *this;
+}
+
+template <typename Block, typename Allocator>
+dynamic_bitset<Block, Allocator>&
+dynamic_bitset<Block, Allocator>::fill(size_type first,
+        size_type last, bool val)
+{
+    assert(last < m_num_bits);
+    assert(first <= last);
+
+    // Start and end blocks of the [first; last] sequence
+    const int first_block = block_index(first);
+    const int last_block = block_index(last);
+
+    const int first_bit_index = bit_index(first);
+    const int last_bit_index = bit_index(last);
+
+    if (first_block == last_block) {
+        // Filling only a sub-block of a block
+        m_bits[first_block] = fill_block_bits(m_bits[first_block],
+            first_bit_index, last_bit_index, val);
+    } else {
+        // Check if the corner blocks won't be fully filled with 'val'
+        const int first_block_shift = (std::min)(bit_index(first), 1);
+        const int last_block_shift = (bit_index(last)
+            == bits_per_block - 1) ? 0 : 1;
+
+        // Blocks that will be filled with ~0 or 0 at once
+        const int first_full_block = first_block + first_block_shift;
+        const int last_full_block = last_block - last_block_shift;
+
+        if (first_full_block <= last_full_block) {
+            std::fill_n(m_bits.begin() + first_full_block,
+                    last_full_block - first_full_block + 1,
+                    val ? static_cast<Block>(~0) : Block(0));
+        }
+
+        // Fill the first block from the 'first' bit index to the end
+        if (first_block_shift) {
+            m_bits[first_block] = fill_block_bits(m_bits[first_block],
+                first_bit_index, bits_per_block - 1, val);
+        }
+
+        // Fill the last block from the start to the 'last' bit index
+        if (last_block_shift) {
+            m_bits[first_block] = fill_block_bits(m_bits[first_block],
+                0, last_bit_index, val);
+        }
+    }
+
+    return *this;
 }
 
 template <typename Block, typename Allocator>
